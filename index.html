@@ -42,12 +42,13 @@
     }
 
     canvas {
+      /* CSS は横幅だけ指定し、高さは自動 (video の比率で決まる) */
       width: 100%;
       height: auto;
-      max-width: 640px;
-      max-height: 480px;
+      max-width: 100%;
       /* ミラー表示（自撮りカメラのように左右反転） */
       transform: scale(-1, 1);
+      background: #000;
     }
 
     #message {
@@ -59,13 +60,6 @@
       font-size: 0.8rem;
       background: rgba(0, 0, 0, 0.7);
     }
-
-    @media (orientation: portrait) {
-      canvas {
-        width: 100vw;
-        height: auto;
-      }
-    }
   </style>
 </head>
 <body>
@@ -73,6 +67,7 @@
 
   <div id="container">
     <video class="input_video" playsinline></video>
+    <!-- width / height はとりあえずダミー。実際は video のサイズで毎フレーム更新する -->
     <canvas class="output_canvas" width="640" height="480"></canvas>
   </div>
 
@@ -84,12 +79,26 @@
     const canvasCtx = canvasElement.getContext('2d');
     const message = document.getElementById('message');
 
+    // video の実サイズに合わせて canvas のサイズを更新
+    function updateCanvasSizeToVideo() {
+      const vw = videoElement.videoWidth;
+      const vh = videoElement.videoHeight;
+      if (vw && vh) {
+        // 内部解像度（描画バッファ）を video と同じにすることで縦横比を一致
+        canvasElement.width  = vw;
+        canvasElement.height = vh;
+      }
+    }
+
     // MediaPipe Pose の処理結果を受け取るコールバック
     function onResults(results) {
+      // video のサイズがまだ取れていない場合があるので、ここでも毎回チェック
+      updateCanvasSizeToVideo();
+
       canvasCtx.save();
       canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
-      // 入力画像を描画
+      // 入力画像を描画（video と同じサイズで描画される）
       canvasCtx.drawImage(
         results.image,
         0,
@@ -146,9 +155,12 @@
 
         camera = new Camera(videoElement, {
           onFrame: async () => {
+            // video のメタデータ読み込み直後はサイズが 0 のことがあるので、
+            // 取得できたタイミングで canvas を合わせる
+            updateCanvasSizeToVideo();
             await pose.send({ image: videoElement });
           },
-          width: 640,
+          width: 640,   // これは希望値。実際の解像度はデバイス依存
           height: 480
         });
 
@@ -160,9 +172,6 @@
       }
     }
 
-    // iOS Safari 対策：ユーザー操作後に開始したい場合は
-    // ボタンを出して click 時に startCamera() を呼ぶ実装も可。
-    // ここではページ読み込み後すぐに開始を試みる。
     window.addEventListener('load', () => {
       startCamera();
     });
