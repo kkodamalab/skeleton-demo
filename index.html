@@ -1,194 +1,171 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MediaPipe Realtime Skeleton Demo</title>
+  <meta charset="UTF-8" />
+  <title>MediaPipe Pose Demo</title>
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 
-<style>
-body{
-margin:0;
-background:#0b1020;
-color:white;
-font-family:-apple-system,BlinkMacSystemFont,Segoe UI;
-}
+  <!-- MediaPipe CDN スクリプト -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.2/pose.js" crossorigin="anonymous"></script>
 
-.app{
-max-width:900px;
-margin:auto;
-padding:20px;
-}
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      text-align: center;
+    }
 
-button{
-padding:12px;
-border-radius:10px;
-border:none;
-background:#60a5fa;
-color:white;
-font-size:16px;
-width:100%;
-}
+    header {
+      padding: 0.5rem;
+      font-size: 1rem;
+      background: #111;
+    }
 
-.viewer-wrap{
-position:relative;
-aspect-ratio:9/16;
-background:black;
-border-radius:16px;
-overflow:hidden;
-}
+    #container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100vw;
+      height: calc(100vh - 2.5rem);
+      overflow: hidden;
+      background: #000;
+    }
 
-video,canvas{
-position:absolute;
-top:0;
-left:0;
-width:100%;
-height:100%;
-object-fit:cover;
-}
+    video {
+      display: none; /* 入力用なので非表示 */
+    }
 
-.mirror{
-transform:scaleX(-1);
-}
-</style>
+    canvas {
+      width: 100%;
+      height: auto;
+      max-width: 640px;
+      max-height: 480px;
+      /* ミラー表示（自撮りカメラのように左右反転） */
+      transform: scale(-1, 1);
+    }
+
+    #message {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 0.3rem 0.5rem;
+      font-size: 0.8rem;
+      background: rgba(0, 0, 0, 0.7);
+    }
+
+    @media (orientation: portrait) {
+      canvas {
+        width: 100vw;
+        height: auto;
+      }
+    }
+  </style>
 </head>
-
 <body>
+  <header>MediaPipe Pose リアルタイム骨格描画</header>
 
-<div class="app">
+  <div id="container">
+    <video class="input_video" playsinline></video>
+    <canvas class="output_canvas" width="640" height="480"></canvas>
+  </div>
 
-<h2>MediaPipe リアルタイム・スケルトン表示</h2>
+  <div id="message">カメラアクセスを許可してください</div>
 
-<button id="startBtn">カメラ開始</button>
+  <script>
+    const videoElement = document.querySelector('.input_video');
+    const canvasElement = document.querySelector('.output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const message = document.getElementById('message');
 
-<div class="viewer-wrap">
-<video id="video" playsinline></video>
-<canvas id="canvas"></canvas>
-</div>
+    // MediaPipe Pose の処理結果を受け取るコールバック
+    function onResults(results) {
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
-<p>FPS: <span id="fps">-</span></p>
+      // 入力画像を描画
+      canvasCtx.drawImage(
+        results.image,
+        0,
+        0,
+        canvasElement.width,
+        canvasElement.height
+      );
 
-</div>
+      // ポーズランドマークがあれば描画
+      if (results.poseLandmarks) {
+        // 接続線（骨格）を描画
+        drawConnectors(
+          canvasCtx,
+          results.poseLandmarks,
+          POSE_CONNECTIONS,
+          { color: '#00F', lineWidth: 2 }
+        );
 
-<script type="module">
+        // ランドマーク点を描画
+        drawLandmarks(
+          canvasCtx,
+          results.poseLandmarks,
+          { color: '#F00', lineWidth: 0, radius: 3 }
+        );
+      }
 
-import {Pose,POSE_CONNECTIONS} from
-"https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
+      canvasCtx.restore();
+    }
 
-import {
-drawConnectors,
-drawLandmarks
-}
-from
-"https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js";
+    // MediaPipe Pose 初期化
+    const pose = new Pose({
+      locateFile: (file) => {
+        // wasm / モデルファイルを CDN から取得
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.2/${file}`;
+      }
+    });
 
-const video=document.getElementById("video")
-const canvas=document.getElementById("canvas")
-const ctx=canvas.getContext("2d")
+    pose.setOptions({
+      upperBodyOnly: false,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+      modelComplexity: 1
+    });
 
-const startBtn=document.getElementById("startBtn")
-const fpsEl=document.getElementById("fps")
+    pose.onResults(onResults);
 
-let pose
-let stream
-let running=false
+    // カメラ初期化
+    let camera = null;
 
-let last=performance.now()
+    async function startCamera() {
+      try {
+        message.textContent = 'カメラ起動中…';
 
-function resize(){
+        camera = new Camera(videoElement, {
+          onFrame: async () => {
+            await pose.send({ image: videoElement });
+          },
+          width: 640,
+          height: 480
+        });
 
-canvas.width=video.videoWidth
-canvas.height=video.videoHeight
+        camera.start();
+        message.textContent = 'ポーズ検出中（全身が入るように離れてください）';
+      } catch (e) {
+        console.error(e);
+        message.textContent = 'カメラの起動に失敗しました';
+      }
+    }
 
-}
-
-function fpsCounter(){
-
-const now=performance.now()
-const fps=1000/(now-last)
-last=now
-
-fpsEl.innerText=fps.toFixed(1)
-
-}
-
-function draw(results){
-
-ctx.clearRect(0,0,canvas.width,canvas.height)
-
-if(!results.poseLandmarks)return
-
-drawConnectors(
-ctx,
-results.poseLandmarks,
-POSE_CONNECTIONS,
-{color:"#60a5fa",lineWidth:4}
-)
-
-drawLandmarks(
-ctx,
-results.poseLandmarks,
-{color:"#22c55e",radius:4}
-)
-
-}
-
-async function loop(){
-
-if(!running)return
-
-await pose.send({image:video})
-
-requestAnimationFrame(loop)
-
-}
-
-function onResults(results){
-
-fpsCounter()
-
-draw(results)
-
-}
-
-async function startCamera(){
-
-stream=await navigator.mediaDevices.getUserMedia({
-video:{
-facingMode:"user",
-width:{ideal:720},
-height:{ideal:1280}
-},
-audio:false
-})
-
-video.srcObject=stream
-
-await video.play()
-
-resize()
-
-pose=new Pose({
-locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-})
-
-pose.setOptions({
-modelComplexity:1,
-smoothLandmarks:true,
-minDetectionConfidence:0.5,
-minTrackingConfidence:0.5
-})
-
-pose.onResults(onResults)
-
-running=true
-
-loop()
-
-}
-
-startBtn.onclick=startCamera
-
-</script>
-
+    // iOS Safari 対策：ユーザー操作後に開始したい場合は
+    // ボタンを出して click 時に startCamera() を呼ぶ実装も可。
+    // ここではページ読み込み後すぐに開始を試みる。
+    window.addEventListener('load', () => {
+      startCamera();
+    });
+  </script>
 </body>
 </html>
